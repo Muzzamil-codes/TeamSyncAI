@@ -4,6 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import file_upload, llm_agent
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # You should define this list based on where your React app is running.
 # In development, it's often http://localhost:3000 or http://localhost:5173
