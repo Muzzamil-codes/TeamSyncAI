@@ -1,70 +1,139 @@
-# Getting Started with Create React App
+# TeamSync Frontend
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+A modern React frontend for TeamSync, powered by Vite, TypeScript, and Tailwind CSS. The application features a minimal black theme and is built to work with the FARM Stack backend.
 
-## Available Scripts
+## Features
 
-In the project directory, you can run:
+- **Upload Management** - Upload WhatsApp chats, Google Meet transcriptions, and other documents
+- **Task Management** - AI-generated tasks with priority levels and due dates
+- **Event Calendar** - Visual calendar displaying important meetings and deadlines
+- **AI Chat** - Chat interface powered by Gemini AI with RAG capabilities
+- **Minimal Black Theme** - Clean, modern UI with dark aesthetic
 
-### `npm start`
+## Tech Stack
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+- **React 18** - UI library
+- **TypeScript** - Type safety
+- **Tailwind CSS** - Utility-first CSS framework
+- **Vite** - Lightning-fast build tool
+- **Lucide React** - Beautiful SVG icons
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Getting Started
 
-### `npm test`
+### Prerequisites
+- Node.js 16+ and npm
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+### Installation
 
-### `npm run build`
+```bash
+npm install
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+### Development
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+```bash
+npm run dev
+```
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+The app will be available at `http://localhost:5173`
 
-### `npm run eject`
+### Build
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+```bash
+npm run build
+```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+### Preview
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+```bash
+npm run preview
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+## Project Structure
 
-## Learn More
+```
+frontend/
+├── src/
+│   ├── components/          # Reusable UI components
+│   │   ├── Header.tsx       # Main header
+│   │   └── Navigation.tsx   # Tab navigation
+│   ├── pages/               # Page components
+│   │   ├── UploadPage.tsx   # File upload interface
+│   │   ├── TodoPage.tsx     # Task list and management
+│   │   ├── CalendarPage.tsx # Event calendar
+│   │   └── ChatPage.tsx     # AI chatbot interface
+│   ├── types/               # TypeScript type definitions
+│   │   └── index.ts
+│   ├── styles/              # Global styles
+│   │   └── globals.css
+│   ├── App.tsx              # Main app component
+│   └── main.tsx             # Entry point
+├── public/
+│   └── index.html           # HTML template
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+└── tailwind.config.js
+```
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+## Color Scheme (Minimal Black)
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- **Primary Background**: `#0a0a0a`
+- **Secondary Background**: `#1a1a1a`
+- **Tertiary Background**: `#2d2d2d`
+- **Text Primary**: `#ffffff`
+- **Text Secondary**: `#b0b0b0`
+- **Accent**: `#3b82f6` (Blue)
 
-### Code Splitting
+## API Integration
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+The frontend is configured to proxy API requests to `http://localhost:8000/api` during development. Update the `vite.config.ts` to change the backend URL.
 
-### Analyzing the Bundle Size
+## Component Overview
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
+### Navigation
+- Tab-based navigation for all main sections
+- Active tab highlighting with blue accent
 
-### Making a Progressive Web App
+### Upload Page
+- Drag-and-drop file upload
+- File type detection (WhatsApp, transcripts, etc.)
+- Upload history with file metadata
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
+### Todo Page
+- Task display with priority badges
+- Filter by status (all/active/completed)
+- Filter by priority (all/high/medium/low)
+- Quick task toggle and deletion
 
-### Advanced Configuration
+### Calendar Page
+- Monthly calendar view
+- Event indicators on calendar dates
+- Upcoming events sidebar
+- Navigate between months
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
+### Chat Page
+- Message history with sender identification
+- User and AI message differentiation
+- Auto-scroll to latest message
+- Keyboard shortcuts (Enter to send, Shift+Enter for newline)
 
-### Deployment
+## Development Notes
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
+- The app uses React 18 with TypeScript for type safety
+- Tailwind CSS is configured with custom color palette for the minimal black theme
+- Icons are sourced from lucide-react for consistency
+- The layout is responsive and works on desktop, tablet, and mobile
 
-### `npm run build` fails to minify
+## Next Steps
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+1. Connect to backend API endpoints
+2. Implement file upload functionality
+3. Integrate Gemini AI for task generation
+4. Implement RAG for chat context
+5. Add user authentication
+6. Deploy to production
+
+---
+
+Built with ❤️ for productivity
