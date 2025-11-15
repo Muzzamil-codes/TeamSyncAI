@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ChevronLeft, ChevronRight, Clock } from 'lucide-react';
+import React from 'react';
+import { Calendar, Clock } from 'lucide-react';
 import { CalendarEvent } from '../types';
 
 interface CalendarPageProps {
@@ -7,153 +7,73 @@ interface CalendarPageProps {
 }
 
 const CalendarPage: React.FC<CalendarPageProps> = ({ events }) => {
-  const [currentDate, setCurrentDate] = useState(new Date(2025, 10, 15)); // Nov 15, 2025
+  const sortedEvents = [...events]
+    .filter(e => e.date !== 'TBD')
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-  const getDaysInMonth = (date: Date) => {
-    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
-  };
+  const tbdEvents = events.filter(e => e.date === 'TBD');
 
-  const getFirstDayOfMonth = (date: Date) => {
-    return new Date(date.getFullYear(), date.getMonth(), 1).getDay();
-  };
-
-  const getEventsByDate = (day: number) => {
-    const dateStr = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    return events.filter(e => e.date === dateStr);
-  };
-
-  const previousMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1));
-  };
-
-  const nextMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1));
-  };
-
-  const daysInMonth = getDaysInMonth(currentDate);
-  const firstDay = getFirstDayOfMonth(currentDate);
-  const monthName = currentDate.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-
-  const days = Array.from({ length: firstDay }).fill(null);
-  for (let i = 1; i <= daysInMonth; i++) {
-    days.push(i);
-  }
-
-  const upcomingEvents = events
-    .filter(e => new Date(e.date) >= new Date())
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .slice(0, 5);
+  const groupedEvents = sortedEvents.reduce((acc, event) => {
+    const date = event.date;
+    if (!acc[date]) acc[date] = [];
+    acc[date].push(event);
+    return acc;
+  }, {} as Record<string, CalendarEvent[]>);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Calendar */}
-      <div className="lg:col-span-2 bg-black-custom-800 border border-gray-700 rounded-lg overflow-hidden">
-        <div className="bg-black-custom-900 px-6 py-4 border-b border-gray-700 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">{monthName}</h2>
-          <div className="flex gap-2">
-            <button
-              onClick={previousMonth}
-              className="p-2 hover:bg-gray-700 rounded transition-colors"
-            >
-              <ChevronLeft size={20} className="text-gray-400" />
-            </button>
-            <button
-              onClick={nextMonth}
-              className="p-2 hover:bg-gray-700 rounded transition-colors"
-            >
-              <ChevronRight size={20} className="text-gray-400" />
-            </button>
-          </div>
-        </div>
-
-        <div className="p-6">
-          {/* Day headers */}
-          <div className="grid grid-cols-7 gap-2 mb-4">
-            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
-              <div key={day} className="text-center text-gray-500 font-semibold text-sm py-2">
-                {day}
+    <div className="space-y-6">
+      {Object.keys(groupedEvents).length > 0 || tbdEvents.length > 0 ? (
+        <>
+          {/* Scheduled Events */}
+          {Object.entries(groupedEvents).map(([date, dateEvents]) => (
+            <div key={date}>
+              <div className="flex items-center gap-3 mb-3">
+                <Calendar size={20} className="text-white" />
+                <h3 className="text-lg font-semibold text-white">
+                  {new Date(date).toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </h3>
               </div>
-            ))}
-          </div>
-
-          {/* Calendar grid */}
-          <div className="grid grid-cols-7 gap-2">
-            {days.map((day, idx) => {
-              const typedDay = day as number | null;
-              const dayEvents = typedDay ? getEventsByDate(typedDay) : [];
-              const isToday = typedDay === new Date().getDate() && 
-                              currentDate.getMonth() === new Date().getMonth() &&
-                              currentDate.getFullYear() === new Date().getFullYear();
-
-              return (
-                <div
-                  key={idx}
-                  className={`aspect-square p-2 rounded border transition-all ${
-                    typedDay
-                      ? isToday
-                        ? 'bg-blue-500/20 border-blue-500'
-                        : dayEvents.length > 0
-                        ? 'bg-green-500/10 border-green-500/30 hover:border-green-500'
-                        : 'bg-black-custom-700 border-gray-700 hover:border-gray-600'
-                      : 'bg-black-custom-900 border-gray-800'
-                  }`}
-                >
-                  {typedDay && (
-                    <div className="flex flex-col h-full">
-                      <span className={`text-sm font-semibold ${
-                        isToday ? 'text-blue-400' : 'text-white'
-                      }`}>
-                        {typedDay}
-                      </span>
-                      {dayEvents.length > 0 && (
-                        <div className="mt-1 flex-1 flex items-end">
-                          <div className="flex gap-1 flex-wrap">
-                            {dayEvents.slice(0, 2).map((event, i) => (
-                              <div
-                                key={i}
-                                className="w-1.5 h-1.5 bg-green-400 rounded-full"
-                                title={event.title}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
+              <div className="space-y-3">
+                {dateEvents.map((event) => (
+                  <div key={event.id} className="bg-gray-950 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-all">
+                    <h4 className="font-semibold text-white mb-2">{event.title}</h4>
+                    {event.description && (
+                      <p className="text-sm text-gray-400 mb-2">{event.description}</p>
+                    )}
+                    <div className="flex items-center gap-2 text-sm text-gray-500">
+                      <Clock size={16} />
+                      {event.time}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      {/* Upcoming Events */}
-      <div className="bg-black-custom-800 border border-gray-700 rounded-lg overflow-hidden">
-        <div className="bg-black-custom-900 px-6 py-4 border-b border-gray-700">
-          <h3 className="font-semibold text-white">Upcoming Events</h3>
-        </div>
-
-        <div className="divide-y divide-gray-700">
-          {upcomingEvents.length > 0 ? (
-            upcomingEvents.map((event) => (
-              <div key={event.id} className="px-6 py-4 hover:bg-black-custom-700 transition-colors">
-                <h4 className="font-semibold text-white text-sm mb-1">{event.title}</h4>
-                <div className="flex items-center gap-2 text-xs text-gray-400">
-                  <Clock size={14} />
-                  <span>{new Date(event.date).toLocaleDateString()} at {event.time}</span>
-                </div>
-                {event.description && (
-                  <p className="text-xs text-gray-500 mt-2">{event.description}</p>
-                )}
+                  </div>
+                ))}
               </div>
-            ))
-          ) : (
-            <div className="px-6 py-8 text-center">
-              <p className="text-gray-500 text-sm">No upcoming events</p>
+            </div>
+          ))}
+
+          {/* TBD Events */}
+          {tbdEvents.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold text-white mb-3">To Be Scheduled</h3>
+              <div className="space-y-3">
+                {tbdEvents.map((event) => (
+                  <div key={event.id} className="bg-gray-950 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-all">
+                    <h4 className="font-semibold text-white mb-2">{event.title}</h4>
+                    {event.description && (
+                      <p className="text-sm text-gray-400">{event.description}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           )}
+        </>
+      ) : (
+        <div className="text-center py-12 bg-gray-950 border border-gray-800 rounded-lg">
+          <Calendar size={48} className="mx-auto mb-4 text-gray-600" />
+          <p className="text-gray-400 mb-2">No calendar events</p>
+          <p className="text-sm text-gray-500">Upload a chat file to extract events</p>
         </div>
-      </div>
+      )}
     </div>
   );
 };

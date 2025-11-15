@@ -4,6 +4,7 @@ import os
 import json
 from datetime import datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from pathlib import Path
@@ -239,31 +240,35 @@ async def get_calendar_events():
         raise HTTPException(status_code=500, detail=f"Error fetching calendar: {str(e)}")
 
 
-@router.post("/chat", response_model=ChatQueryResponse)
+@router.post("/chat")
 async def chat_with_agent(request: ChatQueryRequest):
     """
-    Chat with the AI agent about the uploaded chats.
+    Chat with the AI agent about the uploaded chats with streaming response.
     
-    This endpoint uses the common storage populated by the upload endpoint.
-    The agent has access to all uploaded chat content.
+    This endpoint can work with or without uploaded chat files.
+    If no files are uploaded, the agent will have a normal conversation.
+    If files are uploaded, the agent can analyze the chat content.
+    The response is streamed for real-time output.
     
-    Returns: AI response to the user's question
+    Returns: Streamed AI response to the user's question
     """
     try:
         combined_content = _get_combined_chat_content()
         
-        if not combined_content:
-            raise HTTPException(
-                status_code=400,
-                detail="No chat files uploaded. Please upload a chat file first using the /upload endpoint."
-            )
-        
+        # Allow empty content - agent will handle normal conversation
         agent = get_agent()
-        answer = agent.analyze_chat(combined_content, request.question)
         
-        return {
-            "answer": answer,
-        }
+        # Create a streaming generator that yields response chunks
+        def generate():
+            try:
+                # Stream response from agent
+                for chunk in agent.analyze_chat(combined_content, request.question):
+                    # Yield JSON formatted chunk with newline delimiter
+                    yield f"data: {json.dumps({'chunk': chunk})}\n"
+            except Exception as e:
+                yield f"data: {json.dumps({'error': str(e)})}\n"
+        
+        return StreamingResponse(generate(), media_type="application/x-ndjson")
     
     except HTTPException:
         raise

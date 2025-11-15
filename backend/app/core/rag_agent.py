@@ -4,9 +4,10 @@ Uses LangChain and Google Gemini for WhatsApp chat and document analysis
 """
 
 import os
-from typing import List, Optional
+from typing import List, Optional, Generator, Dict
 from datetime import datetime
 from dotenv import load_dotenv
+from collections import deque
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
@@ -28,33 +29,80 @@ class ChatAnalysisAgent:
         self.llm = ChatGoogleGenerativeAI(
             model=self.model_name,
             google_api_key=self.api_key,
-            temperature=0.3,
+            temperature=0.7,
+            streaming=True,
         )
+        
+        # Initialize conversation memory buffer (keep last 10 exchanges)
+        self.memory_buffer: deque = deque(maxlen=10)
+        self.current_chat_content = ""
     
-    def analyze_chat(self, chat_content: str, question: str) -> str:
-        """Analyze WhatsApp chat content and answer a question.
+    def _format_chat_history(self) -> str:
+        """Format memory buffer into a string for context."""
+        if not self.memory_buffer:
+            return ""
+        
+        history = []
+        for msg in self.memory_buffer:
+            if msg["role"] == "user":
+                history.append(f"User: {msg['content']}")
+            else:
+                history.append(f"Assistant: {msg['content']}")
+        
+        return "\n".join(history)
+    
+    def analyze_chat(self, chat_content: str, question: str) -> Generator[str, None, None]:
+        """Analyze WhatsApp chat content and answer a question with streaming.
         
         Args:
             chat_content: The WhatsApp chat text
             question: User's question about the chat
             
-        Returns:
-            Answer from Gemini
+        Yields:
+            Streamed response chunks from Gemini
         """
-        prompt = PromptTemplate(
-            input_variables=["chat_content", "question"],
-            template="""You are TeamSyc, a productivity AI assistant that analyzes WhatsApp group chats.
+        # Store current chat content for context
+        self.current_chat_content = chat_content
+        
+        # Get chat history for context awareness
+        chat_history = self._format_chat_history()
+        
+        # Check if we have actual chat content to analyze
+        has_chat_data = chat_content and chat_content.strip() and len(chat_content.strip()) > 10
+        
+        # Create the prompt with memory context
+        history_context = f"\nPrevious conversation:\n{chat_history}\n" if chat_history else ""
+        
+        if has_chat_data:
+            # Prompt when chat data is available
+            prompt = PromptTemplate(
+                input_variables=["chat_content", "question", "history"],
+                template="""You are TeamSync, a helpful AI assistant that analyzes WhatsApp group chats and helps with productivity.
 
-Analyze the following WhatsApp group chat and answer the user's question:
+{history}
+
+Based on the following WhatsApp chat data:
 
 <chat>
 {chat_content}
 </chat>
 
-Question: {question}
+User: {question}
 
-Answer:""",
-        )
+Answer concisely and naturally. If the question is not related to the chat, you can answer it normally but try to bring it back to the chat analysis if relevant.""",
+            )
+        else:
+            # Prompt when no chat data is available
+            prompt = PromptTemplate(
+                input_variables=["chat_content", "question", "history"],
+                template="""You are TeamSync, a helpful productivity AI assistant.
+
+{history}
+
+User: {question}
+
+Note: No WhatsApp chat data has been uploaded yet. If the user asks anything about analyzing chats, extracting todos, or calendar events from messages, inform them that they need to upload a chat file first using the Upload section. Otherwise, feel free to have a normal conversation and help them with their questions.""",
+            )
         
         chain = (
             prompt
@@ -62,7 +110,15 @@ Answer:""",
             | StrOutputParser()
         )
         
-        return chain.invoke({"chat_content": chat_content, "question": question})
+        # Stream the response
+        full_response = ""
+        for chunk in chain.stream({"chat_content": chat_content, "question": question, "history": history_context}):
+            full_response += chunk
+            yield chunk
+        
+        # Store in memory buffer after streaming completes
+        self.memory_buffer.append({"role": "user", "content": question})
+        self.memory_buffer.append({"role": "assistant", "content": full_response})
     
     def extract_todos(self, chat_content: str) -> tuple[List[str], List[dict]]:
         """Extract action items, todos, and upcoming dates from chat content.

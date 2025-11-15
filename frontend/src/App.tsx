@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Navigation from './components/Navigation';
 import Header from './components/Header';
 import UploadPage from './pages/UploadPage';
@@ -8,46 +8,113 @@ import ChatPage from './pages/ChatPage';
 import { Todo, CalendarEvent, ChatMessage, UploadedFile } from './types';
 import './styles/globals.css';
 
+const API_BASE_URL = 'http://localhost:8000/api/v1/agent';
+
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('upload');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
-  const [todos, setTodos] = useState<Todo[]>([
-    {
-      id: 1,
-      title: 'Review Q4 marketing proposal',
-      completed: false,
-      priority: 'high',
-      dueDate: '2025-11-20',
-      description: 'Review and provide feedback on the Q4 marketing proposal'
-    },
-    {
-      id: 2,
-      title: 'Prepare slides for client meeting',
-      completed: false,
-      priority: 'medium',
-      dueDate: '2025-11-18'
-    },
-    {
-      id: 3,
-      title: 'Update project documentation',
-      completed: true,
-      priority: 'low',
-      dueDate: '2025-11-16'
-    }
-  ]);
-
-  const [events, setEvents] = useState<CalendarEvent[]>([
-    { id: 1, title: 'Team Standup', date: '2025-11-15', time: '09:00 AM', description: 'Daily team sync' },
-    { id: 2, title: 'Client Presentation', date: '2025-11-18', time: '02:00 PM', description: 'Q4 project presentation' },
-    { id: 3, title: 'Sprint Planning', date: '2025-11-20', time: '10:00 AM', description: 'Plan next sprint' }
-  ]);
-
+  const [todos, setTodos] = useState<Todo[]>([]);
+  const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: 1, sender: 'ai', text: 'Hello! I\'m TeamSync AI. I can help you organize your tasks, analyze your meetings, and answer questions about your uploaded documents. What can I help you with today?', timestamp: new Date().toISOString() }
+    { id: 1, sender: 'ai', text: 'Hello! I\'m TeamSync AI. Upload a chat file to get started.', timestamp: new Date().toISOString() }
   ]);
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleFileUpload = (files: UploadedFile[]) => {
-    setUploadedFiles([...uploadedFiles, ...files]);
+  // Fetch todos from backend
+  const fetchTodos = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/todos`);
+      const data = await response.json();
+      const formattedTodos: Todo[] = data.todos.map((t: any, idx: number) => ({
+        id: idx + 1,
+        title: t.task,
+        completed: false,
+        priority: t.priority,
+        dueDate: new Date().toISOString().split('T')[0],
+        description: t.task
+      }));
+      setTodos(formattedTodos);
+    } catch (error) {
+      console.error('Error fetching todos:', error);
+    }
+  };
+
+  // Fetch calendar events from backend
+  const fetchCalendarEvents = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/calendar`);
+      const data = await response.json();
+      const formattedEvents: CalendarEvent[] = data.dates.map((d: any, idx: number) => ({
+        id: idx + 1,
+        title: d.event,
+        date: d.date,
+        time: '12:00 PM',
+        description: d.description
+      }));
+      setEvents(formattedEvents);
+    } catch (error) {
+      console.error('Error fetching calendar events:', error);
+    }
+  };
+
+  // Fetch uploaded files from backend
+  const fetchUploadedFiles = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/files`);
+      const data = await response.json();
+      const formattedFiles: UploadedFile[] = data.files.map((f: any) => ({
+        id: f.file_name,
+        name: f.file_name,
+        size: f.message_count,
+        uploadedAt: f.uploaded_at
+      }));
+      setUploadedFiles(formattedFiles);
+    } catch (error) {
+      console.error('Error fetching files:', error);
+    }
+  };
+
+  // Refresh data on mount
+  useEffect(() => {
+    fetchUploadedFiles();
+    fetchTodos();
+    fetchCalendarEvents();
+  }, []);
+
+  const handleFileUpload = async (files: File[]) => {
+    setIsLoading(true);
+    try {
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        const response = await fetch(`${API_BASE_URL}/upload`, {
+          method: 'POST',
+          body: formData
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          const newFile: UploadedFile = {
+            id: data.file_name,
+            name: data.file_name,
+            size: data.message_count,
+            uploadedAt: new Date().toISOString()
+          };
+          setUploadedFiles([...uploadedFiles, newFile]);
+          
+          // Refresh todos and calendar after upload
+          setTimeout(() => {
+            fetchTodos();
+            fetchCalendarEvents();
+          }, 1000);
+        }
+      }
+    } catch (error) {
+      console.error('Error uploading file:', error);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleToggleTodo = (id: number) => {
@@ -60,7 +127,29 @@ const App: React.FC = () => {
     setTodos(todos.filter(todo => todo.id !== id));
   };
 
-  const handleSendMessage = (text: string) => {
+  const handleDeleteFile = async (fileName: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/files/${fileName}`, {
+        method: 'DELETE'
+      });
+
+      if (response.ok) {
+        // Remove from uploaded files list
+        setUploadedFiles(uploadedFiles.filter(file => file.name !== fileName));
+        
+        // Refresh todos and calendar after deletion
+        setTimeout(() => {
+          fetchTodos();
+          fetchCalendarEvents();
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error deleting file:', error);
+    }
+  };
+
+  const handleSendMessage = async (text: string) => {
+    setIsLoading(true);
     const userMessage: ChatMessage = {
       id: messages.length + 1,
       sender: 'user',
@@ -68,22 +157,94 @@ const App: React.FC = () => {
       timestamp: new Date().toISOString()
     };
 
-    setMessages([...messages, userMessage]);
+    setMessages(prev => [...prev, userMessage]);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiResponse: ChatMessage = {
-        id: messages.length + 2,
+    // Create AI message placeholder
+    const aiMessageId = messages.length + 2;
+    const aiMessage: ChatMessage = {
+      id: aiMessageId,
+      sender: 'ai',
+      text: '',
+      timestamp: new Date().toISOString()
+    };
+    
+    setMessages(prev => [...prev, aiMessage]);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: text })
+      });
+
+      if (response.ok && response.body) {
+        // Handle streaming response
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullResponse = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.chunk) {
+                  fullResponse += data.chunk;
+                  // Update the AI message with streamed content
+                  setMessages(prev =>
+                    prev.map(msg =>
+                      msg.id === aiMessageId
+                        ? { ...msg, text: fullResponse }
+                        : msg
+                    )
+                  );
+                }
+              } catch (e) {
+                console.error('Error parsing stream:', e);
+              }
+            }
+          }
+        }
+      } else {
+        // Fallback error message
+        const errorResponse: ChatMessage = {
+          id: aiMessageId,
+          sender: 'ai',
+          text: 'Sorry, I encountered an error. Please try again.',
+          timestamp: new Date().toISOString()
+        };
+        setMessages(prev =>
+          prev.map(msg =>
+            msg.id === aiMessageId ? errorResponse : msg
+          )
+        );
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      const errorResponse: ChatMessage = {
+        id: aiMessageId,
         sender: 'ai',
-        text: 'I\'ve received your message. This is a prototype response. In production, this would be powered by the Gemini AI backend with RAG capabilities.',
+        text: 'Sorry, I encountered an error. Please try again.',
         timestamp: new Date().toISOString()
       };
-      setMessages(prev => [...prev, aiResponse]);
-    }, 1000);
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === aiMessageId ? errorResponse : msg
+        )
+      );
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-black-custom-900">
+    <div className="min-h-screen bg-black text-white">
       <Navigation activeTab={activeTab} onTabChange={setActiveTab} />
       <Header />
 
@@ -92,6 +253,8 @@ const App: React.FC = () => {
           <UploadPage
             onFilesUpload={handleFileUpload}
             uploadedFiles={uploadedFiles}
+            onDeleteFile={handleDeleteFile}
+            isLoading={isLoading}
           />
         )}
         {activeTab === 'todos' && (
@@ -106,6 +269,7 @@ const App: React.FC = () => {
           <ChatPage
             messages={messages}
             onSendMessage={handleSendMessage}
+            isLoading={isLoading}
           />
         )}
       </main>
