@@ -1,0 +1,23 @@
+fastapi
+uvicorn[standard]
+python-multipart   
+aiofiles           
+pydantic
+pydantic[email]
+
+# Database & ORM
+sqlalchemy>=2.0.0
+alembic
+
+# Authentication & Security
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+
+# Background Tasks & Caching
+celery[redis]>=5.3.0
+redis>=4.5.0
+
+# Google Gemini & LLM
+google-generativeai
+langchain>=0.1.0           

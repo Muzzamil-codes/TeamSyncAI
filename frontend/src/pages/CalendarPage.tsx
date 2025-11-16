@@ -1,5 +1,5 @@
 import React from 'react';
-import { Calendar, Clock } from 'lucide-react';
+import { Calendar } from 'lucide-react';
 import { CalendarEvent } from '../types';
 
 interface CalendarPageProps {
@@ -38,12 +38,8 @@ const CalendarPage: React.FC<CalendarPageProps> = ({ events }) => {
                   <div key={event.id} className="bg-gray-950 border border-gray-800 rounded-lg p-4 hover:border-gray-700 transition-all">
                     <h4 className="font-semibold text-white mb-2">{event.title}</h4>
                     {event.description && (
-                      <p className="text-sm text-gray-400 mb-2">{event.description}</p>
+                      <p className="text-sm text-gray-400">{event.description}</p>
                     )}
-                    <div className="flex items-center gap-2 text-sm text-gray-500">
-                      <Clock size={16} />
-                      {event.time}
-                    </div>
                   </div>
                 ))}
               </div>

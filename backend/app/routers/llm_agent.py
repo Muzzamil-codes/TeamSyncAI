@@ -2,353 +2,335 @@
 
 import os
 import json
+import threading
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from pathlib import Path
+from sqlalchemy.orm import Session
 
-from app.core import ChatAnalysisAgent, get_agent, parse_whatsapp_chat, chat_to_string
+from app.core.rag_agent import ChatAnalysisAgent
+from app.core.database import get_db
+from app.models import User, UploadedFile, TodoItem, CalendarEvent
+from app.tasks import process_uploaded_file, analyze_chat_async
+from app.routers.auth import get_current_user
 
 router = APIRouter()
 
-# --- Pydantic Schemas for Request/Response ---
+# Initialize agent globally
+agent = ChatAnalysisAgent()
 
-class ChatMessage(BaseModel):
-    """Schema for a single chat message."""
-    message: str
+# --- Pydantic Schemas ---
+
+class ChatQueryRequest(BaseModel):
+    """Schema for chat query request."""
+    question: str
+    file_id: Optional[int] = None
+
+
+class TodoItemSchema(BaseModel):
+    """Schema for a single To-Do item."""
+    id: int
+    task: str
+    priority: str
+    completed: bool
+    due_date: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class CalendarEventSchema(BaseModel):
+    """Schema for calendar event."""
+    id: int
+    title: str
+    event_date: str
+    description: Optional[str] = None
+    is_scheduled: bool
+
+    class Config:
+        from_attributes = True
+    
+    @staticmethod
+    def from_orm(obj):
+        """Override from_orm to convert datetime to string"""
+        if obj is None:
+            return None
+        # Get the attributes as a dictionary
+        data = {
+            'id': obj.id,
+            'title': obj.title,
+            'event_date': obj.event_date.strftime('%Y-%m-%d') if hasattr(obj.event_date, 'strftime') else str(obj.event_date),
+            'description': obj.description,
+            'is_scheduled': obj.is_scheduled
+        }
+        return CalendarEventSchema(**data)
 
 
 class UploadResponse(BaseModel):
     """Schema for file upload response."""
     status: str
     message: str
+    file_id: int
     file_name: str
+    task_id: str
+
+
+class FileInfo(BaseModel):
+    """Schema for uploaded file info."""
+    id: int
+    filename: str
     message_count: int
-    todos: List[str]
-    important_dates: List[Dict[str, str]]
-
-
-class ChatQueryRequest(BaseModel):
-    """Schema for chat query request."""
-    question: str
-
-
-class ChatQueryResponse(BaseModel):
-    """Schema for chat query response."""
-    answer: str
-
-
-class TodoItem(BaseModel):
-    """Schema for a single To-Do item."""
-    task: str
-    priority: Optional[str] = "medium"
-
-
-class TodosResponse(BaseModel):
-    """Schema for todos response."""
-    todos: List[TodoItem]
-    count: int
-    last_updated: str
-
-
-class ImportantDate(BaseModel):
-    """Schema for an important date/event."""
-    date: str
-    event: str
-    description: Optional[str] = None
-
-
-class CalendarResponse(BaseModel):
-    """Schema for calendar response."""
-    dates: List[ImportantDate]
-    count: int
-    last_updated: str
-
-
-class DataStoreItem(BaseModel):
-    """Schema for data store."""
-    file_name: str
-    content: str
     uploaded_at: str
-    todos: List[str]
-    important_dates: List[Dict[str, str]]
+
+    class Config:
+        from_attributes = True
 
 
-# Module-level state - Common storage for all uploaded chats
-_data_store: Dict[str, DataStoreItem] = {}
-_current_file_name: Optional[str] = None
+class StatusResponse(BaseModel):
+    """Schema for status response."""
+    status: str
+    message: str
 
 
-def _get_upload_dir() -> Path:
-    """Get or create the uploaded data directory."""
-    upload_dir = Path("uploaded_data")
-    upload_dir.mkdir(exist_ok=True)
-    return upload_dir
 
-
-def _get_combined_chat_content() -> str:
-    """Get all chat content from the data store combined."""
-    if not _data_store:
-        return ""
-    
-    combined = []
-    for store_item in _data_store.values():
-        combined.append(f"--- File: {store_item.file_name} ---")
-        combined.append(store_item.content)
-    
-    return "\n\n".join(combined)
-
-
-# --- MAIN ENDPOINTS FOR FRONTEND ---
+# --- Endpoints ---
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_chat(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Upload a WhatsApp chat export file.
-    
-    This endpoint:
-    1. Stores the chat content in common storage
-    2. Automatically extracts todos
-    3. Automatically identifies important dates
-    4. Makes data available to all other endpoints
-    
-    Returns: Upload confirmation with extracted todos and dates
+    Upload and process a chat file.
+    Returns task_id for async processing status.
     """
-    global _current_file_name
-    
     try:
         # Read file content
         content = await file.read()
-        chat_content = content.decode("utf-8")
+        text_content = content.decode("utf-8", errors="ignore")
+        
+        # Create uploads directory if not exists
+        upload_dir = Path("uploaded_data")
+        upload_dir.mkdir(exist_ok=True)
         
         # Save file
-        upload_dir = _get_upload_dir()
-        file_path = upload_dir / file.filename
-        with open(file_path, "wb") as f:
-            f.write(content)
-        
-        # Extract todos and dates using AI
-        agent = get_agent()
-        todos, important_dates = agent.extract_todos(chat_content)
-        
-        # Store in common storage
-        _data_store[file.filename] = DataStoreItem(
-            file_name=file.filename,
-            content=chat_content,
-            uploaded_at=datetime.now().isoformat(),
-            todos=todos,
-            important_dates=important_dates
-        )
-        
-        _current_file_name = file.filename
+        file_path = upload_dir / f"{current_user.id}_{file.filename}"
+        with open(file_path, "w", encoding="utf-8") as f:
+            f.write(text_content)
         
         # Count messages
-        lines = chat_content.strip().split("\n")
-        message_count = len([l for l in lines if " - " in l])
+        message_count = text_content.count("\n")
         
-        return {
-            "status": "success",
-            "message": f"Successfully uploaded {file.filename} with {message_count} messages",
-            "file_name": file.filename,
-            "message_count": message_count,
-            "todos": todos,
-            "important_dates": important_dates,
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error uploading file: {str(e)}")
-
-
-@router.get("/todos", response_model=TodosResponse)
-async def get_todos():
-    """
-    Get all extracted todos from uploaded chats.
-    
-    Returns todos that were extracted and stored during file upload.
-    """
-    try:
-        # Collect all todos from stored files
-        all_todos = []
-        latest_updated = datetime.now().isoformat()
+        # Create file record in database
+        db_file = UploadedFile(
+            filename=file.filename,
+            file_path=str(file_path),
+            user_id=current_user.id,
+            content=text_content,
+            message_count=message_count
+        )
+        db.add(db_file)
+        db.commit()
+        db.refresh(db_file)
         
-        for store_item in _data_store.values():
-            for todo_text in store_item.todos:
-                all_todos.append({
-                    "task": todo_text.strip('- '),
-                    "priority": "medium"
-                })
-            # Update latest timestamp from most recent file
-            if store_item.uploaded_at > latest_updated:
-                latest_updated = store_item.uploaded_at
+        # Return immediately, then process in background
+        task_id = f"file-{db_file.id}"
         
-        # Convert to TodoItem objects
-        todo_items = [
-            TodoItem(
-                task=todo["task"],
-                priority=todo["priority"]
+        # Queue background task for processing (don't wait for it)
+        try:
+            task = process_uploaded_file.apply_async(
+                args=(db_file.id, current_user.id),
+                queue='default'
             )
-            for todo in all_todos
-        ]
+            task_id = task.id
+        except Exception as celery_error:
+            # If Celery fails, queue synchronous processing in a thread
+            import logging
+            import sys
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Celery task queueing failed (expected). Processing asynchronously via thread.")
+            print(f"[DEBUG] Celery failed, starting thread for file {db_file.id}", flush=True)
+            
+            def process_in_thread():
+                try:
+                    print(f"[DEBUG] Thread STARTED for file {db_file.id}", flush=True)
+                    from app.tasks import process_file_sync
+                    result = process_file_sync(db_file.id, current_user.id)
+                    print(f"[DEBUG] Thread COMPLETED for file {db_file.id}: {result}", flush=True)
+                except Exception as e:
+                    print(f"[ERROR] Thread FAILED for file {db_file.id}: {e}", flush=True)
+                    import traceback
+                    traceback.print_exc()
+            
+            # Start processing in background thread (non-blocking)
+            thread = threading.Thread(target=process_in_thread, daemon=True)
+            thread.start()
+            print(f"[DEBUG] Thread object created and started for file {db_file.id}", flush=True)
         
-        return {
-            "todos": todo_items,
-            "count": len(todo_items),
-            "last_updated": latest_updated,
-        }
+        return UploadResponse(
+            status="success",
+            message="File uploaded successfully. Processing started.",
+            file_id=db_file.id,
+            file_name=file.filename,
+            task_id=task_id
+        )
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching todos: {str(e)}")
+        import logging
+        logging.error(f"File upload error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error uploading file: {str(e)}"
+        )
 
 
-@router.get("/calendar", response_model=CalendarResponse)
-async def get_calendar_events():
-    """
-    Get important dates and events from uploaded chats.
+@router.get("/todos", response_model=List[TodoItemSchema])
+async def get_todos(
+    file_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get todos for current user, optionally filtered by file"""
+    query = db.query(TodoItem).filter(TodoItem.user_id == current_user.id)
     
-    Returns dates and events that were extracted and stored during file upload.
-    """
-    try:
-        # Collect all dates from stored files
-        all_dates = []
-        latest_updated = datetime.now().isoformat()
-        
-        for store_item in _data_store.values():
-            all_dates.extend(store_item.important_dates)
-            # Update latest timestamp from most recent file
-            if store_item.uploaded_at > latest_updated:
-                latest_updated = store_item.uploaded_at
-        
-        # Convert to ImportantDate objects
-        important_dates = [
-            ImportantDate(
-                date=date_item.get("date", "TBD"),
-                event=date_item.get("event", ""),
-                description=date_item.get("description")
-            )
-            for date_item in all_dates
-        ]
-        
-        return {
-            "dates": important_dates,
-            "count": len(important_dates),
-            "last_updated": latest_updated,
-        }
+    if file_id:
+        query = query.filter(TodoItem.file_id == file_id)
     
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching calendar: {str(e)}")
+    todos = query.order_by(TodoItem.created_at.desc()).all()
+    
+    return [TodoItemSchema.from_orm(todo) for todo in todos]
+
+
+@router.get("/calendar", response_model=List[CalendarEventSchema])
+async def get_calendar_events(
+    file_id: Optional[int] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get calendar events for current user, optionally filtered by file"""
+    from datetime import date as dt_date
+    today = dt_date.today()
+    
+    query = db.query(CalendarEvent).filter(
+        CalendarEvent.user_id == current_user.id,
+        CalendarEvent.event_date >= today  # Today and future dates
+    )
+    
+    if file_id:
+        query = query.filter(CalendarEvent.file_id == file_id)
+    
+    events = query.order_by(CalendarEvent.event_date).all()
+    
+    return [CalendarEventSchema.from_orm(event) for event in events]
 
 
 @router.post("/chat")
-async def chat_with_agent(request: ChatQueryRequest):
+async def chat(
+    request: ChatQueryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Chat with the AI agent about the uploaded chats with streaming response.
-    
-    This endpoint can work with or without uploaded chat files.
-    If no files are uploaded, the agent will have a normal conversation.
-    If files are uploaded, the agent can analyze the chat content.
-    The response is streamed for real-time output.
-    
-    Returns: Streamed AI response to the user's question
+    Chat endpoint with streaming response.
+    Supports both real-time analysis and async processing.
     """
+    
+    # Get chat content from uploaded file or use empty
+    chat_content = ""
+    if request.file_id:
+        file_record = db.query(UploadedFile).filter(
+            UploadedFile.id == request.file_id,
+            UploadedFile.user_id == current_user.id
+        ).first()
+        
+        if file_record:
+            chat_content = file_record.content or ""
+    
+    async def generate():
+        try:
+            # Stream analysis response
+            for chunk in agent.analyze_chat(chat_content, request.question):
+                yield f'data: {{"chunk": {json.dumps(chunk)}}}\n'
+        except Exception as e:
+            yield f'data: {{"error": {json.dumps(str(e))}}}\n'
+    
+    return StreamingResponse(generate(), media_type="application/x-ndjson")
+
+
+@router.get("/files", response_model=List[FileInfo])
+async def list_files(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """List all uploaded files for current user"""
+    files = db.query(UploadedFile).filter(
+        UploadedFile.user_id == current_user.id
+    ).order_by(UploadedFile.uploaded_at.desc()).all()
+    
+    return [
+        FileInfo(
+            id=f.id,
+            filename=f.filename,
+            message_count=f.message_count,
+            uploaded_at=f.uploaded_at.isoformat() if f.uploaded_at else None
+        )
+        for f in files
+    ]
+
+
+@router.delete("/files/{file_id}", response_model=StatusResponse)
+async def delete_file(
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete an uploaded file and associated data"""
+    
+    file_record = db.query(UploadedFile).filter(
+        UploadedFile.id == file_id,
+        UploadedFile.user_id == current_user.id
+    ).first()
+    
+    if not file_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+    
     try:
-        combined_content = _get_combined_chat_content()
+        # Delete associated todos and events
+        db.query(TodoItem).filter(TodoItem.file_id == file_id).delete()
+        db.query(CalendarEvent).filter(CalendarEvent.file_id == file_id).delete()
         
-        # Allow empty content - agent will handle normal conversation
-        agent = get_agent()
+        # Delete file from disk
+        if os.path.exists(file_record.file_path):
+            os.remove(file_record.file_path)
         
-        # Create a streaming generator that yields response chunks
-        def generate():
-            try:
-                # Stream response from agent
-                for chunk in agent.analyze_chat(combined_content, request.question):
-                    # Yield JSON formatted chunk with newline delimiter
-                    yield f"data: {json.dumps({'chunk': chunk})}\n"
-            except Exception as e:
-                yield f"data: {json.dumps({'error': str(e)})}\n"
+        # Delete file record
+        db.delete(file_record)
+        db.commit()
         
-        return StreamingResponse(generate(), media_type="application/x-ndjson")
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing chat: {str(e)}")
-
-
-@router.get("/files")
-async def list_uploaded_files():
-    """
-    Get list of all uploaded chat files.
-    
-    Returns: List of file names and their metadata
-    """
-    try:
-        files_list = []
-        for file_name, store_item in _data_store.items():
-            files_list.append({
-                "file_name": file_name,
-                "uploaded_at": store_item.uploaded_at,
-                "message_count": len(store_item.content.split("\n")),
-                "todo_count": len(store_item.todos),
-                "date_count": len(store_item.important_dates),
-            })
-        
-        return {
-            "files": files_list,
-            "total_files": len(files_list),
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching files: {str(e)}")
-
-
-@router.delete("/files/{file_name}")
-async def delete_file(file_name: str):
-    """
-    Delete an uploaded chat file from storage.
-    
-    This will remove the file from common storage and the uploaded_data directory.
-    """
-    try:
-        # Remove from memory store
-        if file_name in _data_store:
-            del _data_store[file_name]
-        
-        # Remove from disk
-        upload_dir = _get_upload_dir()
-        file_path = upload_dir / file_name
-        if file_path.exists():
-            file_path.unlink()
-        
-        return {
-            "status": "success",
-            "message": f"File {file_name} deleted successfully",
-        }
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting file: {str(e)}")
-
-
-@router.get("/status")
-async def get_status():
-    """
-    Get current status of the system.
-    
-    Returns: Information about uploaded files and storage
-    """
-    try:
-        combined_content = _get_combined_chat_content()
-        total_todos = sum(len(item.todos) for item in _data_store.values())
-        total_dates = sum(len(item.important_dates) for item in _data_store.values())
-        
-        return {
-            "files_uploaded": len(_data_store),
-            "total_messages": len(combined_content.split("\n")),
-            "total_todos": total_todos,
-            "total_calendar_events": total_dates,
-            "is_ready": len(_data_store) > 0,
-        }
+        return StatusResponse(
+            status="success",
+            message="File deleted successfully"
+        )
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting status: {str(e)}")
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting file: {str(e)}"
+        )
+
+
+@router.get("/status", response_model=StatusResponse)
+async def get_status(current_user: User = Depends(get_current_user)):
+    """Get API status"""
+    return StatusResponse(
+        status="ok",
+        message="TeamSync API is running"
+    )

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Navigation from './components/Navigation';
 import Header from './components/Header';
 import UploadPage from './pages/UploadPage';
@@ -8,9 +9,19 @@ import ChatPage from './pages/ChatPage';
 import { Todo, CalendarEvent, ChatMessage, UploadedFile } from './types';
 import './styles/globals.css';
 
-const API_BASE_URL = 'http://localhost:8000/api/v1/agent';
+const API_BASE_URL = 'http://localhost:8001/api/v1/agent';
+
+// Helper to get auth header
+const getAuthHeader = () => {
+  const token = localStorage.getItem('auth_token');
+  return {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  };
+};
 
 const App: React.FC = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('upload');
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -23,14 +34,26 @@ const App: React.FC = () => {
   // Fetch todos from backend
   const fetchTodos = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/todos`);
+      const response = await fetch(`${API_BASE_URL}/todos`, {
+        headers: getAuthHeader()
+      });
+      if (response.status === 401 || response.status === 403) {
+        navigate('/login');
+        return;
+      }
       const data = await response.json();
-      const formattedTodos: Todo[] = data.todos.map((t: any, idx: number) => ({
+      // Filter todos to only show today's todos
+      const today = new Date().toISOString().split('T')[0];
+      const todaysTodos = data.filter((t: any) => {
+        const dueDate = t.due_date || new Date().toISOString().split('T')[0];
+        return dueDate === today;
+      });
+      const formattedTodos: Todo[] = todaysTodos.map((t: any, idx: number) => ({
         id: idx + 1,
         title: t.task,
-        completed: false,
+        completed: t.completed || false,
         priority: t.priority,
-        dueDate: new Date().toISOString().split('T')[0],
+        dueDate: t.due_date || today,
         description: t.task
       }));
       setTodos(formattedTodos);
@@ -42,12 +65,18 @@ const App: React.FC = () => {
   // Fetch calendar events from backend
   const fetchCalendarEvents = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/calendar`);
+      const response = await fetch(`${API_BASE_URL}/calendar`, {
+        headers: getAuthHeader()
+      });
+      if (response.status === 401 || response.status === 403) {
+        navigate('/login');
+        return;
+      }
       const data = await response.json();
-      const formattedEvents: CalendarEvent[] = data.dates.map((d: any, idx: number) => ({
+      const formattedEvents: CalendarEvent[] = data.map((d: any, idx: number) => ({
         id: idx + 1,
-        title: d.event,
-        date: d.date,
+        title: d.title,
+        date: d.event_date,
         time: '12:00 PM',
         description: d.description
       }));
@@ -60,11 +89,17 @@ const App: React.FC = () => {
   // Fetch uploaded files from backend
   const fetchUploadedFiles = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/files`);
+      const response = await fetch(`${API_BASE_URL}/files`, {
+        headers: getAuthHeader()
+      });
+      if (response.status === 401 || response.status === 403) {
+        navigate('/login');
+        return;
+      }
       const data = await response.json();
-      const formattedFiles: UploadedFile[] = data.files.map((f: any) => ({
-        id: f.file_name,
-        name: f.file_name,
+      const formattedFiles: UploadedFile[] = data.map((f: any) => ({
+        id: f.id,
+        name: f.filename,
         size: f.message_count,
         uploadedAt: f.uploaded_at
       }));
@@ -82,32 +117,84 @@ const App: React.FC = () => {
   }, []);
 
   const handleFileUpload = async (files: File[]) => {
+    console.log('Upload started with', files.length, 'files');
     setIsLoading(true);
     try {
       for (const file of files) {
+        console.log('Processing file:', file.name, 'Size:', file.size);
         const formData = new FormData();
         formData.append('file', file);
         
-        const response = await fetch(`${API_BASE_URL}/upload`, {
-          method: 'POST',
-          body: formData
-        });
+        const token = localStorage.getItem('auth_token');
+        console.log('Token available:', !!token);
         
-        if (response.ok) {
-          const data = await response.json();
-          const newFile: UploadedFile = {
-            id: data.file_name,
-            name: data.file_name,
-            size: data.message_count,
-            uploadedAt: new Date().toISOString()
-          };
-          setUploadedFiles([...uploadedFiles, newFile]);
+        if (!token) {
+          console.error('No auth token found');
+          navigate('/login');
+          return;
+        }
+        
+        try {
+          console.log('Sending upload request to:', `${API_BASE_URL}/upload`);
+          const response = await fetch(`${API_BASE_URL}/upload`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${token}`
+            },
+            body: formData
+          });
           
-          // Refresh todos and calendar after upload
+          console.log('Upload response status:', response.status);
+          
+          if (response.status === 401 || response.status === 403) {
+            console.error('Auth error on upload');
+            navigate('/login');
+            return;
+          }
+
+          if (response.ok) {
+            console.log('Upload successful, parsing response');
+            const data = await response.json();
+            console.log('Response data:', data);
+            const newFile: UploadedFile = {
+              id: data.file_id,
+              name: data.file_name,
+              size: 0,
+              uploadedAt: new Date().toISOString()
+            };
+            setUploadedFiles([...uploadedFiles, newFile]);
+            
+            // Refresh todos and calendar after upload with longer delay for processing
+            // Polling every 2 seconds for up to 30 seconds
+            console.log('Starting polling for processed data');
+            let attempts = 0;
+            const pollInterval = setInterval(async () => {
+              attempts++;
+              console.log('Poll attempt', attempts);
+              try {
+                await fetchTodos();
+                await fetchCalendarEvents();
+              } catch (e) {
+                console.error('Error polling:', e);
+              }
+              
+              if (attempts >= 15) {
+                console.log('Polling complete');
+                clearInterval(pollInterval);
+              }
+            }, 2000);
+            
+          } else {
+            const errorText = await response.text();
+            console.error('Upload failed with status:', response.status, 'Response:', errorText);
+          }
+        } catch (fetchError) {
+          console.error('Fetch error during upload:', fetchError);
+          // Try to refresh data anyway after a delay
           setTimeout(() => {
             fetchTodos();
             fetchCalendarEvents();
-          }, 1000);
+          }, 3000);
         }
       }
     } catch (error) {
@@ -129,13 +216,24 @@ const App: React.FC = () => {
 
   const handleDeleteFile = async (fileName: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/files/${fileName}`, {
-        method: 'DELETE'
+      // Find file ID from uploadedFiles
+      const file = uploadedFiles.find(f => f.name === fileName);
+      if (!file) return;
+
+      const token = localStorage.getItem('auth_token');
+      const response = await fetch(`${API_BASE_URL}/files/${file.id}`, {
+        method: 'DELETE',
+        headers: getAuthHeader()
       });
+
+      if (response.status === 401 || response.status === 403) {
+        navigate('/login');
+        return;
+      }
 
       if (response.ok) {
         // Remove from uploaded files list
-        setUploadedFiles(uploadedFiles.filter(file => file.name !== fileName));
+        setUploadedFiles(uploadedFiles.filter(f => f.id !== file.id));
         
         // Refresh todos and calendar after deletion
         setTimeout(() => {
@@ -171,11 +269,26 @@ const App: React.FC = () => {
     setMessages(prev => [...prev, aiMessage]);
 
     try {
+      const token = localStorage.getItem('auth_token');
+      // Get the most recent uploaded file ID (if any)
+      const fileId = uploadedFiles.length > 0 ? uploadedFiles[0].id : undefined;
+      
       const response = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: text })
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ 
+          question: text,
+          file_id: fileId
+        })
       });
+
+      if (response.status === 401 || response.status === 403) {
+        navigate('/login');
+        return;
+      }
 
       if (response.ok && response.body) {
         // Handle streaming response
